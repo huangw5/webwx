@@ -14,23 +14,25 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
-func newClient() *http.Client {
+func newClient() HTTPClient {
 	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	if err != nil {
 		log.Fatal(err)
 	}
-	return &http.Client{
-		Timeout: time.Second * 30,
-		Jar:     jar,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+	return &httpClient{
+		&http.Client{
+			Timeout: time.Second * 30,
+			Jar:     jar,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 }
 
 func TestGetUUID(t *testing.T) {
-	client := newClient()
-	uuid, err := GetUUID(client)
+	w := &Wechat{Client: newClient()}
+	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
 	}
@@ -41,8 +43,8 @@ func TestGetUUID(t *testing.T) {
 }
 
 func TestGetQRCode(t *testing.T) {
-	client := newClient()
-	uuid, err := GetUUID(client)
+	w := &Wechat{Client: newClient()}
+	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
 	}
@@ -52,14 +54,14 @@ func TestGetQRCode(t *testing.T) {
 		t.Fatalf("TempFile failed: %v", err)
 	}
 	defer tmp.Close()
-	if err := GetQRCode(client, uuid, tmp); err != nil {
+	if err := w.GetQRCode(uuid, tmp); err != nil {
 		t.Errorf("GetQRCode failed; %v", err)
 	}
 }
 
 func TestWaitUntilLoggedIn(t *testing.T) {
-	client := newClient()
-	uuid, err := GetUUID(client)
+	w := &Wechat{Client: newClient()}
+	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
 	}
@@ -70,11 +72,11 @@ func TestWaitUntilLoggedIn(t *testing.T) {
 	}
 	defer tmp.Close()
 	defer os.Remove(tmp.Name())
-	if err := GetQRCode(client, uuid, tmp); err != nil {
+	if err := w.GetQRCode(uuid, tmp); err != nil {
 		t.Fatalf("GetQRCode failed; %v", err)
 	}
 	log.Printf("Please scan %s from your phone\n", tmp.Name())
-	uri, err := WaitUntilLoggedIn(client, uuid)
+	uri, err := w.WaitUntilLoggedIn(uuid)
 	if err != nil {
 		t.Fatalf("WaitUntilLoggedIn failed: %v", err)
 	}
@@ -82,8 +84,8 @@ func TestWaitUntilLoggedIn(t *testing.T) {
 }
 
 func TestLogin(t *testing.T) {
-	client := newClient()
-	uuid, err := GetUUID(client)
+	w := &Wechat{Client: newClient()}
+	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
 	}
@@ -94,17 +96,17 @@ func TestLogin(t *testing.T) {
 	}
 	defer tmp.Close()
 	defer os.Remove(tmp.Name())
-	if err := GetQRCode(client, uuid, tmp); err != nil {
+	if err := w.GetQRCode(uuid, tmp); err != nil {
 		t.Fatalf("GetQRCode failed; %v", err)
 	}
 	log.Printf("Please scan %s from your phone\n", tmp.Name())
-	uri, err := WaitUntilLoggedIn(client, uuid)
+	uri, err := w.WaitUntilLoggedIn(uuid)
 	if err != nil {
 		t.Fatalf("WaitUntilLoggedIn failed: %v", err)
 	}
 	log.Printf("uri: %s", uri)
 
-	if _, err := Login(client, uri); err != nil {
+	if _, err := w.Login(uri); err != nil {
 		t.Fatalf("Login failed: %v", err)
 	}
 }

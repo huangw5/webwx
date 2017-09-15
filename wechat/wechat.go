@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -17,6 +18,12 @@ import (
 const (
 	// UserAgent is Chrome.
 	UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.79 Safari/537.36"
+	// URLLogin is the URL for logging in.
+	URLLogin = "https://login.weixin.qq.com"
+	// URLSync is the URL for syncing.
+	URLSync = "https://webpush.wechat.com"
+	// URLWeb is the URL for web.
+	URLWeb = "https://web.wechat.com"
 )
 
 // NowUnixMilli returns UTC time of milliseconds since.
@@ -48,11 +55,39 @@ type BaseJSON struct {
 	BaseRequest *BaseRequest `json:"BaseRequest"`
 }
 
+// HTTPClient wraps http.Client.
+type HTTPClient interface {
+	Do(method, url string, body io.Reader) (*http.Response, error)
+}
+
+type httpClient struct {
+	c *http.Client
+}
+
+func (hc *httpClient) Do(method, url string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("User-Agent", UserAgent)
+	req.Header.Add("Referer", "https://wx.qq.com/")
+	log.Printf("Request: %s %s\n", req.Method, req.URL)
+	resp, err := hc.c.Do(req)
+	log.Printf("Response: %s\n", resp.Status)
+	return resp, err
+}
+
+// Wechat is an instance of wechat ID.
+type Wechat struct {
+	Client HTTPClient
+	AppID  string
+}
 
 // GetUUID returns the UUID.
-func GetUUID(client *http.Client) (string, error) {
-	url := fmt.Sprintf("https://login.weixin.qq.com/jslogin?appid=%s&fun=new&lang=us_EN&_=%d", "wx782c26e4c19acffb", NowUnixMilli())
-	resp, err := client.Get(url)
+func (w *Wechat) GetUUID() (string, error) {
+	url := fmt.Sprintf("%s/jslogin?appid=%s&fun=new&lang=us_EN&_=%d",
+		URLLogin, "wx782c26e4c19acffb", NowUnixMilli())
+	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("error on GET: %v", err)
 	}
@@ -60,7 +95,6 @@ func GetUUID(client *http.Client) (string, error) {
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP status: %s", resp.Status)
 	}
-	log.Printf("resp: %+v\n", resp)
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -75,9 +109,9 @@ func GetUUID(client *http.Client) (string, error) {
 }
 
 // GetQRCode retrieves and saves the QR image to a file.
-func GetQRCode(client *http.Client, uuid string, f *os.File) error {
-	url := fmt.Sprintf("https://login.weixin.qq.com/qrcode/%s?t=webwx", uuid)
-	resp, err := client.Get(url)
+func (w *Wechat) GetQRCode(uuid string, f *os.File) error {
+	url := fmt.Sprintf("%s/qrcode/%s?t=webwx", URLLogin, uuid)
+	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("error on GET: %v", err)
 	}
@@ -85,7 +119,6 @@ func GetQRCode(client *http.Client, uuid string, f *os.File) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("HTTP status: %s", resp.Status)
 	}
-	log.Printf("resp: %+v\n", resp)
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -99,12 +132,13 @@ func GetQRCode(client *http.Client, uuid string, f *os.File) error {
 }
 
 // WaitUntilLoggedIn waits until user clicks login or timed out. Returns a redirect_uri.
-func WaitUntilLoggedIn(client *http.Client, uuid string) (string, error) {
-	url := fmt.Sprintf("https://login.weixin.qq.com/cgi-bin/mmwebwx-bin/login?uuid=%s&_=%d", uuid, NowUnixMilli())
+func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/login?uuid=%s&_=%d",
+		URLLogin, uuid, NowUnixMilli())
 	re := regexp.MustCompile("window.redirect_uri=\"([^\"]+)\"")
 	const tries = 10
 	for i := 0; i < tries; i++ {
-		resp, err := client.Get(url)
+		resp, err := w.Client.Do("GET", url, nil)
 		if err != nil {
 			log.Printf("Error on GET: %v", err)
 			continue
@@ -126,17 +160,13 @@ func WaitUntilLoggedIn(client *http.Client, uuid string) (string, error) {
 }
 
 // Login logs on and returns basic info.
-func Login(client *http.Client, url string) (*LoginInfo, error) {
+func (w *Wechat) Login(url string) (*LoginInfo, error) {
 	// First access the redirect_uri.
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Add("User-Agent", UserAgent)
-	req.Header.Add("Referer", "https://wx.qq.com/")
-	resp, err := client.Do(req)
+	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error on GET: %v", err)
 	}
 	defer resp.Body.Close()
-	log.Printf("resp: %+v\n", resp)
 
 	// Expect 301.
 	if resp.StatusCode != 301 {
@@ -167,22 +197,18 @@ func Login(client *http.Client, url string) (*LoginInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal: %v", err)
 	}
-	url2 := fmt.Sprintf("https://web.wechat.com/cgi-bin/mmwebwx-bin/webwxinit?pass_ticket=%s&skey=%s&r=%d", li.PassTicket, li.Skey, NowUnixMilli())
-	req2, _ := http.NewRequest("POST", url2, bytes.NewBuffer(b))
-	req2.Header.Add("User-Agent", UserAgent)
-	req2.Header.Add("Referer", "https://wx.qq.com/")
-	resp2, err := client.Do(req2)
+	url2 := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxinit?pass_ticket=%s&skey=%s&r=%d",
+		URLWeb, li.PassTicket, li.Skey, NowUnixMilli())
+	resp2, err := w.Client.Do("POST", url2, bytes.NewBuffer(b))
 	if err != nil {
 		return nil, fmt.Errorf("error on POST: %v", err)
 	}
 	defer resp2.Body.Close()
-	log.Printf("resp: %+v\n", resp2)
 
 	body2, err := ioutil.ReadAll(resp2.Body)
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %v", err)
 	}
 	log.Printf("body: %s", string(body2))
-
 	return li, nil
 }
