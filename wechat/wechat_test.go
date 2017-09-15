@@ -1,6 +1,8 @@
 package wechat
 
 import (
+	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -20,6 +22,9 @@ func newClient() *http.Client {
 	return &http.Client{
 		Timeout: time.Second * 30,
 		Jar:     jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 }
 
@@ -76,7 +81,7 @@ func TestWaitUntilLoggedIn(t *testing.T) {
 	log.Printf("uri: %s", uri)
 }
 
-func TestInitialize(t *testing.T) {
+func TestLogin(t *testing.T) {
 	client := newClient()
 	uuid, err := GetUUID(client)
 	if err != nil {
@@ -99,7 +104,24 @@ func TestInitialize(t *testing.T) {
 	}
 	log.Printf("uri: %s", uri)
 
-	if err := Initialize(client, uri); err != nil {
-		t.Fatalf("Initialize failed: %v", err)
+	if _, err := Login(client, uri); err != nil {
+		t.Fatalf("Login failed: %v", err)
 	}
+}
+
+func TestMarshal(t *testing.T) {
+	bj := &BaseJSON{
+		BaseRequest: &BaseRequest{
+			Uin:      "li.Wxuin",
+			Sid:      "li.Wxsid",
+			Skey:     "li.Skey",
+			DeviceID: fmt.Sprintf("e%d", time.Now().Unix()),
+		},
+	}
+
+	b, err := json.Marshal(bj)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+	log.Printf("b: %s", string(b))
 }
