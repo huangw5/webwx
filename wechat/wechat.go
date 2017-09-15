@@ -50,9 +50,17 @@ type BaseRequest struct {
 	Uin      string `json:"Uin"`
 }
 
+// SyncKey is sync key.
+type SyncKey struct {
+	Count int                 `json:"Count"`
+	List  []map[string]string `json:"List"`
+}
+
 // BaseJSON is.
 type BaseJSON struct {
 	BaseRequest *BaseRequest `json:"BaseRequest"`
+	SyncKey     *SyncKey     `json:"SyncKey"`
+	RR          int          `json:"rr"`
 }
 
 // HTTPClient wraps http.Client.

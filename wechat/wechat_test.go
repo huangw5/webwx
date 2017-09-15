@@ -119,6 +119,15 @@ func TestMarshal(t *testing.T) {
 			Skey:     "li.Skey",
 			DeviceID: fmt.Sprintf("e%d", time.Now().Unix()),
 		},
+		SyncKey: &SyncKey{
+			Count: 2,
+			List: []map[string]string{
+				{
+					"Key": "1",
+					"Val": "B",
+				},
+			},
+		},
 	}
 
 	b, err := json.Marshal(bj)
