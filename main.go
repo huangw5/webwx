@@ -1,18 +1,21 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
-	"time"
+	"flag"
 
+	"github.com/golang/glog"
 	"github.com/huangw5/webwx/wechat"
 )
 
 func main() {
-	fmt.Printf("Hello, World")
+	flag.Parse()
+	flag.Lookup("logtostderr").Value.Set("true")
 
-	c := &http.Client{
-		Timeout: time.Second * 10,
+	c := wechat.NewClient()
+	w := &wechat.Wechat{Client: c}
+	bj, err := w.Login()
+	if err != nil {
+		glog.Exitf("Failed to login: %v", err)
 	}
-	wechat.GetUUID(c)
+	glog.Infof("Got BaseJSON: %+v", bj)
 }

@@ -5,33 +5,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
-	"net/http/cookiejar"
 	"os"
 	"testing"
 	"time"
-
-	"golang.org/x/net/publicsuffix"
 )
 
-func newClient() HTTPClient {
-	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
-	if err != nil {
-		log.Fatal(err)
-	}
-	return &httpClient{
-		&http.Client{
-			Timeout: time.Second * 30,
-			Jar:     jar,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-	}
-}
-
 func TestGetUUID(t *testing.T) {
-	w := &Wechat{Client: newClient()}
+	w := &Wechat{Client: NewClient()}
 	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
@@ -43,7 +23,7 @@ func TestGetUUID(t *testing.T) {
 }
 
 func TestGetQRCode(t *testing.T) {
-	w := &Wechat{Client: newClient()}
+	w := &Wechat{Client: NewClient()}
 	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
@@ -60,7 +40,7 @@ func TestGetQRCode(t *testing.T) {
 }
 
 func TestWaitUntilLoggedIn(t *testing.T) {
-	w := &Wechat{Client: newClient()}
+	w := &Wechat{Client: NewClient()}
 	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
@@ -83,8 +63,8 @@ func TestWaitUntilLoggedIn(t *testing.T) {
 	log.Printf("uri: %s", uri)
 }
 
-func TestLogin(t *testing.T) {
-	w := &Wechat{Client: newClient()}
+func TestInit(t *testing.T) {
+	w := &Wechat{Client: NewClient()}
 	uuid, err := w.GetUUID()
 	if err != nil {
 		t.Fatalf("GetUUID failed: %v", err)
@@ -106,8 +86,8 @@ func TestLogin(t *testing.T) {
 	}
 	log.Printf("uri: %s", uri)
 
-	if _, err := w.Login(uri); err != nil {
-		t.Fatalf("Login failed: %v", err)
+	if _, err := w.Init(uri); err != nil {
+		t.Fatalf("Init failed: %v", err)
 	}
 }
 

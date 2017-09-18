@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"regexp"
 	"time"
+
+	"github.com/golang/glog"
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -52,8 +55,8 @@ type BaseRequest struct {
 
 // SyncKey is sync key.
 type SyncKey struct {
-	Count int                 `json:"Count"`
-	List  []map[string]string `json:"List"`
+	Count int              `json:"Count"`
+	List  []map[string]int `json:"List"`
 }
 
 // BaseJSON is.
@@ -79,10 +82,27 @@ func (hc *httpClient) Do(method, url string, body io.Reader) (*http.Response, er
 	}
 	req.Header.Add("User-Agent", UserAgent)
 	req.Header.Add("Referer", "https://wx.qq.com/")
-	log.Printf("Request: %s %s\n", req.Method, req.URL)
+	glog.Infof("Request: %s %s\n", req.Method, req.URL)
 	resp, err := hc.c.Do(req)
-	log.Printf("Response: %s\n", resp.Status)
+	glog.Infof("Response: %s\n", resp.Status)
 	return resp, err
+}
+
+// NewClient creates a new instance of httpClient.
+func NewClient() HTTPClient {
+	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
+	if err != nil {
+		glog.Fatal(err)
+	}
+	return &httpClient{
+		&http.Client{
+			Timeout: time.Second * 30,
+			Jar:     jar,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
 }
 
 // Wechat is an instance of wechat ID.
@@ -135,7 +155,7 @@ func (w *Wechat) GetQRCode(uuid string, f *os.File) error {
 	if _, err := f.Write(body); err != nil {
 		return fmt.Errorf("error writing QR image: %v", err)
 	}
-	log.Printf("Successfully save QR image to %s", f.Name())
+	glog.Infof("Successfully save QR image to %s", f.Name())
 	return nil
 }
 
@@ -148,17 +168,17 @@ func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
 	for i := 0; i < tries; i++ {
 		resp, err := w.Client.Do("GET", url, nil)
 		if err != nil {
-			log.Printf("Error on GET: %v", err)
+			glog.Infof("Error on GET: %v", err)
 			continue
 		}
 		defer resp.Body.Close()
 
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			log.Printf("Error reading body: %v", err)
+			glog.Infof("Error reading body: %v", err)
 			continue
 		}
-		log.Printf("Body: %s", body)
+		glog.Infof("Body: %s", body)
 		matches := re.FindStringSubmatch(string(body))
 		if len(matches) == 2 {
 			return matches[1], nil
@@ -167,8 +187,8 @@ func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
 	return "", errors.New("timeout when waiting for user to login")
 }
 
-// Login logs on and returns basic info.
-func (w *Wechat) Login(url string) (*LoginInfo, error) {
+// Init logs on and returns basic info.
+func (w *Wechat) Init(url string) (*BaseJSON, error) {
 	// First access the redirect_uri.
 	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
@@ -190,7 +210,7 @@ func (w *Wechat) Login(url string) (*LoginInfo, error) {
 	if err := xml.Unmarshal(body, li); err != nil {
 		return nil, fmt.Errorf("Failed to unmarshal body: %v", err)
 	}
-	log.Printf("Login Info: %+v", li)
+	glog.Infof("Login Info: %+v", li)
 
 	// Then init.
 	bj := &BaseJSON{
@@ -217,6 +237,43 @@ func (w *Wechat) Login(url string) (*LoginInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %v", err)
 	}
-	log.Printf("body: %s", string(body2))
-	return li, nil
+	if err := json.Unmarshal(body2, bj); err != nil {
+		return nil, fmt.Errorf("error on unmarshal: %v", err)
+	}
+	return bj, nil
+}
+
+// Login logs into.
+func (w *Wechat) Login() (*BaseJSON, error) {
+	glog.Infof("Getting UUID...")
+	uuid, err := w.GetUUID()
+	if err != nil {
+		return nil, fmt.Errorf("error on GetUUID(): %v", err)
+	}
+	glog.Infof("UUID: %s", uuid)
+
+	glog.Infof("Getting QR code...")
+	f, err := os.Create("QR.jpg")
+	if err != nil {
+		return nil, fmt.Errorf("error on createing QR file: %v", err)
+	}
+	if err := w.GetQRCode(uuid, f); err != nil {
+		return nil, fmt.Errorf("error on getting QR code: %v", err)
+	}
+
+	glog.Infof("Please scan QR code from you phone: %s", f.Name())
+	rurl, err := w.WaitUntilLoggedIn(uuid)
+	if err != nil {
+		return nil, fmt.Errorf("error on scanning the QR code")
+	}
+	glog.Infof("Got init URL: %s", rurl)
+
+	glog.Infof("Initializing wechat...")
+	bj, err := w.Init(rurl)
+	if err != nil {
+		return nil, fmt.Errorf("error on init: %v", err)
+	}
+	glog.Infof("Got BaseJSON: %+v", bj)
+	glog.Infof("Login successfully")
+	return bj, nil
 }
