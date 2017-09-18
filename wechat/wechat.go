@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -24,7 +25,8 @@ const (
 	// URLLogin is the URL for logging in.
 	URLLogin = "https://login.weixin.qq.com"
 	// URLSync is the URL for syncing.
-	URLSync = "https://webpush.wechat.com"
+	//URLSync = "https://webpush.wechat.com"
+	URLSync = "https://webpush2.weixin.qq.com"
 	// URLWeb is the URL for web.
 	URLWeb = "https://web.wechat.com"
 )
@@ -59,11 +61,32 @@ type SyncKey struct {
 	List  []map[string]int `json:"List"`
 }
 
+func (s SyncKey) String() string {
+	var entries []string
+	for _, m := range s.List {
+		entries = append(entries, fmt.Sprintf("%d_%d", m["Key"], m["Val"]))
+	}
+	return strings.Join(entries, "%7C")
+}
+
 // BaseJSON is.
 type BaseJSON struct {
 	BaseRequest *BaseRequest `json:"BaseRequest"`
 	SyncKey     *SyncKey     `json:"SyncKey"`
 	RR          int          `json:"rr"`
+}
+
+// SyncRes holds the result for syncing with the server.
+//    retcode: 0    successful
+//	     1100 logout
+//	     1101 login otherwhere
+//    selector: 0 nothing
+//	      2 message
+//	      6 unkonwn
+//	      7 webwxsync
+type SyncRes struct {
+	Retcode  string
+	Selector string
 }
 
 // HTTPClient wraps http.Client.
@@ -82,9 +105,9 @@ func (hc *httpClient) Do(method, url string, body io.Reader) (*http.Response, er
 	}
 	req.Header.Add("User-Agent", UserAgent)
 	req.Header.Add("Referer", "https://wx.qq.com/")
-	glog.Infof("Request: %s %s\n", req.Method, req.URL)
+	glog.V(1).Infof("Request: %s %s\n", req.Method, req.URL)
 	resp, err := hc.c.Do(req)
-	glog.Infof("Response: %s\n", resp.Status)
+	glog.V(1).Infof("Response: %s\n", resp)
 	return resp, err
 }
 
@@ -107,8 +130,9 @@ func NewClient() HTTPClient {
 
 // Wechat is an instance of wechat ID.
 type Wechat struct {
-	Client HTTPClient
-	AppID  string
+	Client   HTTPClient
+	BaseJSON *BaseJSON
+	AppID    string
 }
 
 // GetUUID returns the UUID.
@@ -243,37 +267,66 @@ func (w *Wechat) Init(url string) (*BaseJSON, error) {
 	return bj, nil
 }
 
-// Login logs into.
-func (w *Wechat) Login() (*BaseJSON, error) {
+// Login logs onto the server.
+func (w *Wechat) Login() error {
 	glog.Infof("Getting UUID...")
 	uuid, err := w.GetUUID()
 	if err != nil {
-		return nil, fmt.Errorf("error on GetUUID(): %v", err)
+		return fmt.Errorf("error on GetUUID(): %v", err)
 	}
 	glog.Infof("UUID: %s", uuid)
 
 	glog.Infof("Getting QR code...")
 	f, err := os.Create("QR.jpg")
 	if err != nil {
-		return nil, fmt.Errorf("error on createing QR file: %v", err)
+		return fmt.Errorf("error on createing QR file: %v", err)
 	}
 	if err := w.GetQRCode(uuid, f); err != nil {
-		return nil, fmt.Errorf("error on getting QR code: %v", err)
+		return fmt.Errorf("error on getting QR code: %v", err)
 	}
 
 	glog.Infof("Please scan QR code from you phone: %s", f.Name())
 	rurl, err := w.WaitUntilLoggedIn(uuid)
 	if err != nil {
-		return nil, fmt.Errorf("error on scanning the QR code")
+		return fmt.Errorf("error on scanning the QR code")
 	}
 	glog.Infof("Got init URL: %s", rurl)
 
 	glog.Infof("Initializing wechat...")
-	bj, err := w.Init(rurl)
+	w.BaseJSON, err = w.Init(rurl)
 	if err != nil {
-		return nil, fmt.Errorf("error on init: %v", err)
+		return fmt.Errorf("error on init: %v", err)
 	}
-	glog.Infof("Got BaseJSON: %+v", bj)
+	glog.Infof("Got BaseJSON: %+v", w.BaseJSON)
 	glog.Infof("Login successfully")
-	return bj, nil
+	return nil
+}
+
+// SyncCheck synchronizes with the server.
+func (w *Wechat) SyncCheck() (*SyncRes, error) {
+	glog.Infof("SyncCheck...")
+	br := w.BaseJSON.BaseRequest
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/synccheck?r=%d&sid=%s&uin=%s,skey=%s,deviceid=%s,synckey=%s&_=%d",
+		URLSync, NowUnixMilli(), br.Sid, br.Uin, br.Skey, br.DeviceID, w.BaseJSON.SyncKey.String(), NowUnixMilli())
+
+	resp, err := w.Client.Do("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error on GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP status: %s", resp.Status)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading body: %v", err)
+	}
+	re := regexp.MustCompile("window.synccheck={retcode:\"([^\"]+)\",selector:\"([^\"]+)\"}")
+	matches := re.FindStringSubmatch(string(body))
+	if len(matches) != 3 {
+		return nil, fmt.Errorf("invalid response: %s", string(body))
+	}
+	return &SyncRes{Retcode: matches[1], Selector: matches[2]}, nil
 }

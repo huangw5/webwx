@@ -3,12 +3,36 @@ package wechat
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
+
+type stubClient struct {
+	resp *http.Response
+	err  error
+}
+
+func (s *stubClient) Do(method, url string, body io.Reader) (*http.Response, error) {
+	return s.resp, s.err
+}
+
+type readerCloser struct {
+	reader io.Reader
+}
+
+func (r *readerCloser) Read(p []byte) (n int, err error) {
+	return r.reader.Read(p)
+}
+
+func (r *readerCloser) Close() error {
+	return nil
+}
 
 func TestGetUUID(t *testing.T) {
 	w := &Wechat{Client: NewClient()}
@@ -100,11 +124,11 @@ func TestMarshal(t *testing.T) {
 			DeviceID: fmt.Sprintf("e%d", time.Now().Unix()),
 		},
 		SyncKey: &SyncKey{
-			Count: 2,
-			List: []map[string]string{
+			Count: 1,
+			List: []map[string]int{
 				{
-					"Key": "1",
-					"Val": "B",
+					"Key": 1,
+					"Val": 3,
 				},
 			},
 		},
@@ -115,4 +139,54 @@ func TestMarshal(t *testing.T) {
 		t.Fatalf("Failed to marshal: %v", err)
 	}
 	log.Printf("b: %s", string(b))
+}
+
+func TestSyncKey(t *testing.T) {
+	sk := &SyncKey{
+		Count: 2,
+		List: []map[string]int{
+			{
+				"Key": 1,
+				"Val": 100,
+			},
+			{
+				"Key": 2,
+				"Val": 200,
+			},
+			{
+				"Key": 3,
+				"Val": 300,
+			},
+		},
+	}
+	want := "1_100|2_200|3_300"
+	if got := sk.String(); got != want {
+		t.Errorf("got: %s, want %s", got, want)
+	}
+}
+
+func TestSyncCheck(t *testing.T) {
+	body := `window.synccheck={retcode:"1101",selector:"0"}`
+	c := &stubClient{
+		resp: &http.Response{
+			StatusCode: 200,
+			Body:       &readerCloser{reader: strings.NewReader(body)},
+		},
+		err: nil,
+	}
+	w := &Wechat{Client: c}
+	w.BaseJSON = &BaseJSON{
+		BaseRequest: &BaseRequest{},
+		SyncKey:     &SyncKey{},
+	}
+	sr, err := w.SyncCheck()
+	if err != nil {
+		t.Fatalf("SyncCheck failed: %v", err)
+	}
+	if sr.Retcode != "1101" {
+		t.Errorf("Retcode = %s, want %s", sr.Retcode, "1101")
+	}
+	if sr.Selector != "0" {
+		t.Errorf("Selector = %s, want %s", sr.Selector, "0")
+	}
 }
