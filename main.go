@@ -28,6 +28,7 @@ func main() {
 	if err := w.Login(); err != nil {
 		glog.Exitf("Failed to login: %v", err)
 	}
+	messages := make(map[string]bool)
 	ticker := time.NewTicker(syncInterval)
 	for ; true; <-ticker.C {
 		sr, err := w.SyncCheck()
@@ -41,9 +42,15 @@ func main() {
 		if err != nil {
 			glog.Exitf("WebwxSync failed: %v", err)
 		}
-		if ws.AddMsgCount > 1 {
-			glog.Infof("Received %d new messages.", ws.AddMsgCount)
-			for _, msg := range ws.AddMsgList {
+		var newMessages []string
+		for _, msg := range ws.AddMsgList {
+			if msg.MsgType != 1 {
+				// Skip non-text messages.
+				continue
+			}
+			if _, ok := messages[msg.MsgID]; !ok {
+				newMessages = append(newMessages, msg.Content)
+				messages[msg.MsgID] = true
 				glog.Infof("Message: %s", msg.Content)
 			}
 		}

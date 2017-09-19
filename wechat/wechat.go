@@ -83,6 +83,8 @@ type BaseResponse struct {
 
 // AddMsg is new message.
 type AddMsg struct {
+	MsgID   string `json:"MsgId"`
+	MsgType int    `json:"MsgType"`
 	Content string `json:"Content"`
 }
 
@@ -90,7 +92,7 @@ type AddMsg struct {
 type BaseResponseJSON struct {
 	BaseResponse *BaseResponse `json:"BaseResponse"`
 	AddMsgCount  int           `json:"AddMsgCount"`
-	AddMsgList   []*AddMsg      `json:"AddMsgList"`
+	AddMsgList   []*AddMsg     `json:"AddMsgList"`
 }
 
 // SyncRes holds the result for syncing with the server.
