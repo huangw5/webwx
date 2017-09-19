@@ -12,23 +12,40 @@ const (
 	syncInterval = 28 * time.Second
 )
 
+var (
+	appid = flag.String("appid", "wx782c26e4c19acffb", "App ID")
+)
+
 func main() {
 	flag.Parse()
 	flag.Lookup("logtostderr").Value.Set("true")
 
 	c := wechat.NewClient()
-	w := &wechat.Wechat{Client: c}
+	w := &wechat.Wechat{
+		Client: c,
+		AppID:  *appid,
+	}
 	if err := w.Login(); err != nil {
 		glog.Exitf("Failed to login: %v", err)
 	}
-	//ticker := time.NewTicker(syncInterval)
-	//for _ = range ticker.C {
+	ticker := time.NewTicker(syncInterval)
+	for ; true; <-ticker.C {
 		sr, err := w.SyncCheck()
 		if err != nil || sr.Retcode != "0" {
 			glog.Exitf("SyncCheck failed -- Res: %+v, err: %v", sr, err)
 		}
-		if sr.Selector == "6" {
-			glog.Infof("Got new WeChat messages")
+		if sr.Selector == "0" {
+			continue
 		}
-	//}
+		ws, err := w.WebwxSync()
+		if err != nil {
+			glog.Exitf("WebwxSync failed: %v", err)
+		}
+		if ws.AddMsgCount > 1 {
+			glog.Infof("Received %d new messages.", ws.AddMsgCount)
+			for _, msg := range ws.AddMsgList {
+				glog.Infof("Message: %s", msg.Content)
+			}
+		}
+	}
 }

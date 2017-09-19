@@ -20,15 +20,14 @@ import (
 )
 
 const (
-	// UserAgent is Chrome.
-	UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.79 Safari/537.36"
-	// URLLogin is the URL for logging in.
-	URLLogin = "https://login.weixin.qq.com"
-	// URLSync is the URL for syncing.
-	//URLSync = "https://webpush.wechat.com"
-	URLSync = "https://webpush2.weixin.qq.com"
-	// URLWeb is the URL for web.
-	URLWeb = "https://web.wechat.com"
+	// userAgent is Chrome.
+	userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.79 Safari/537.36"
+	loginHost = "https://login.weixin.qq.com"
+	webHost   = "https://web.wechat.com"
+)
+
+var (
+	syncHosts = []string{"https://webpush2.wechat.com", "https://webpush.wechat.com"}
 )
 
 // NowUnixMilli returns UTC time of milliseconds since.
@@ -66,14 +65,32 @@ func (s SyncKey) String() string {
 	for _, m := range s.List {
 		entries = append(entries, fmt.Sprintf("%d_%d", m["Key"], m["Val"]))
 	}
-	return strings.Join(entries, "%7C")
+	return strings.Join(entries, "|")
 }
 
-// BaseJSON is.
-type BaseJSON struct {
+// BaseRequestJSON is.
+type BaseRequestJSON struct {
 	BaseRequest *BaseRequest `json:"BaseRequest"`
 	SyncKey     *SyncKey     `json:"SyncKey"`
 	RR          int          `json:"rr"`
+}
+
+// BaseResponse is.
+type BaseResponse struct {
+	Ret    int    `json:"Ret"`
+	ErrMsg string `json:"ErrMsg"`
+}
+
+// AddMsg is new message.
+type AddMsg struct {
+	Content string `json:"Content"`
+}
+
+// BaseResponseJSON is.
+type BaseResponseJSON struct {
+	BaseResponse *BaseResponse `json:"BaseResponse"`
+	AddMsgCount  int           `json:"AddMsgCount"`
+	AddMsgList   []*AddMsg      `json:"AddMsgList"`
 }
 
 // SyncRes holds the result for syncing with the server.
@@ -103,11 +120,11 @@ func (hc *httpClient) Do(method, url string, body io.Reader) (*http.Response, er
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Add("User-Agent", UserAgent)
+	req.Header.Add("User-Agent", userAgent)
 	req.Header.Add("Referer", "https://wx.qq.com/")
 	glog.V(1).Infof("Request: %s %s\n", req.Method, req.URL)
 	resp, err := hc.c.Do(req)
-	glog.V(1).Infof("Response: %s\n", resp)
+	glog.V(1).Infof("Response: %+v\n", resp)
 	return resp, err
 }
 
@@ -130,15 +147,16 @@ func NewClient() HTTPClient {
 
 // Wechat is an instance of wechat ID.
 type Wechat struct {
-	Client   HTTPClient
-	BaseJSON *BaseJSON
-	AppID    string
+	Client          HTTPClient
+	BaseRequestJSON *BaseRequestJSON
+	LoginInfo       *LoginInfo
+	AppID           string
 }
 
 // GetUUID returns the UUID.
 func (w *Wechat) GetUUID() (string, error) {
 	url := fmt.Sprintf("%s/jslogin?appid=%s&fun=new&lang=us_EN&_=%d",
-		URLLogin, "wx782c26e4c19acffb", NowUnixMilli())
+		loginHost, w.AppID, NowUnixMilli())
 	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("error on GET: %v", err)
@@ -162,7 +180,7 @@ func (w *Wechat) GetUUID() (string, error) {
 
 // GetQRCode retrieves and saves the QR image to a file.
 func (w *Wechat) GetQRCode(uuid string, f *os.File) error {
-	url := fmt.Sprintf("%s/qrcode/%s?t=webwx", URLLogin, uuid)
+	url := fmt.Sprintf("%s/qrcode/%s?t=webwx", loginHost, uuid)
 	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("error on GET: %v", err)
@@ -186,7 +204,7 @@ func (w *Wechat) GetQRCode(uuid string, f *os.File) error {
 // WaitUntilLoggedIn waits until user clicks login or timed out. Returns a redirect_uri.
 func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
 	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/login?uuid=%s&_=%d",
-		URLLogin, uuid, NowUnixMilli())
+		loginHost, uuid, NowUnixMilli())
 	re := regexp.MustCompile("window.redirect_uri=\"([^\"]+)\"")
 	const tries = 10
 	for i := 0; i < tries; i++ {
@@ -202,7 +220,7 @@ func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
 			glog.Infof("Error reading body: %v", err)
 			continue
 		}
-		glog.Infof("Body: %s", body)
+		glog.V(1).Infof("Body: %s", body)
 		matches := re.FindStringSubmatch(string(body))
 		if len(matches) == 2 {
 			return matches[1], nil
@@ -212,7 +230,7 @@ func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
 }
 
 // Init logs on and returns basic info.
-func (w *Wechat) Init(url string) (*BaseJSON, error) {
+func (w *Wechat) Init(url string) (*BaseRequestJSON, error) {
 	// First access the redirect_uri.
 	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
@@ -234,10 +252,9 @@ func (w *Wechat) Init(url string) (*BaseJSON, error) {
 	if err := xml.Unmarshal(body, li); err != nil {
 		return nil, fmt.Errorf("Failed to unmarshal body: %v", err)
 	}
-	glog.Infof("Login Info: %+v", li)
 
 	// Then init.
-	bj := &BaseJSON{
+	bj := &BaseRequestJSON{
 		BaseRequest: &BaseRequest{
 			Uin:      li.Wxuin,
 			Sid:      li.Wxsid,
@@ -249,8 +266,9 @@ func (w *Wechat) Init(url string) (*BaseJSON, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal: %v", err)
 	}
+	w.LoginInfo = li
 	url2 := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxinit?pass_ticket=%s&skey=%s&r=%d",
-		URLWeb, li.PassTicket, li.Skey, NowUnixMilli())
+		webHost, li.PassTicket, li.Skey, NowUnixMilli())
 	resp2, err := w.Client.Do("POST", url2, bytes.NewBuffer(b))
 	if err != nil {
 		return nil, fmt.Errorf("error on POST: %v", err)
@@ -293,11 +311,11 @@ func (w *Wechat) Login() error {
 	glog.Infof("Got init URL: %s", rurl)
 
 	glog.Infof("Initializing wechat...")
-	w.BaseJSON, err = w.Init(rurl)
+	w.BaseRequestJSON, err = w.Init(rurl)
 	if err != nil {
 		return fmt.Errorf("error on init: %v", err)
 	}
-	glog.Infof("Got BaseJSON: %+v", w.BaseJSON)
+	glog.Infof("Got BaseRequestJSON: %+v", w.BaseRequestJSON)
 	glog.Infof("Login successfully")
 	return nil
 }
@@ -305,9 +323,22 @@ func (w *Wechat) Login() error {
 // SyncCheck synchronizes with the server.
 func (w *Wechat) SyncCheck() (*SyncRes, error) {
 	glog.Infof("SyncCheck...")
-	br := w.BaseJSON.BaseRequest
-	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/synccheck?r=%d&sid=%s&uin=%s,skey=%s,deviceid=%s,synckey=%s&_=%d",
-		URLSync, NowUnixMilli(), br.Sid, br.Uin, br.Skey, br.DeviceID, w.BaseJSON.SyncKey.String(), NowUnixMilli())
+	syncRes := &SyncRes{}
+	var err error
+	for _, host := range syncHosts {
+		syncRes, err = w.syncCheckHelper(host)
+		if err == nil && syncRes.Retcode == "0" {
+			glog.Infof("Successfully synccheck: %+v", syncRes)
+			return syncRes, nil
+		}
+	}
+	return syncRes, err
+}
+
+func (w *Wechat) syncCheckHelper(host string) (*SyncRes, error) {
+	br := w.BaseRequestJSON.BaseRequest
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/synccheck?r=%d&sid=%s&uin=%s&skey=%s&deviceid=%s&synckey=%s&_=%d",
+		host, NowUnixMilli(), br.Sid, br.Uin, br.Skey, br.DeviceID, w.BaseRequestJSON.SyncKey.String(), NowUnixMilli())
 
 	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
@@ -329,4 +360,30 @@ func (w *Wechat) SyncCheck() (*SyncRes, error) {
 		return nil, fmt.Errorf("invalid response: %s", string(body))
 	}
 	return &SyncRes{Retcode: matches[1], Selector: matches[2]}, nil
+}
+
+// WebwxSync retrieves new messages.
+func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
+	w.BaseRequestJSON.RR = NowUnixMilli()
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxsync?sid=%s&skey=%s&r=%d", webHost, w.BaseRequestJSON.BaseRequest.Sid, w.BaseRequestJSON.BaseRequest.Skey, w.BaseRequestJSON.RR)
+	b, err := json.Marshal(w.BaseRequestJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal: %v", err)
+	}
+	resp, err := w.Client.Do("POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return nil, fmt.Errorf("error on POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading body: %v", err)
+	}
+	glog.V(1).Infof("body: %s", string(body))
+	br := &BaseResponseJSON{}
+	if err := json.Unmarshal(body, br); err != nil {
+		return nil, fmt.Errorf("error on unmarshal: %v", err)
+	}
+	return br, nil
 }
