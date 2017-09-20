@@ -413,6 +413,7 @@ func (w *Wechat) syncCheckHelper(host string) (*SyncRes, error) {
 
 // WebwxSync retrieves new messages.
 func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
+	glog.Info("WebwxSync...")
 	w.BaseRequestJSON.RR = NowUnixMilli()
 	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxsync?sid=%s&skey=%s&r=%d", webHost, w.BaseRequestJSON.BaseRequest.Sid, w.BaseRequestJSON.BaseRequest.Skey, w.BaseRequestJSON.RR)
 	b, err := json.Marshal(w.BaseRequestJSON)
@@ -441,5 +442,6 @@ func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
 			msg.NickName = msg.FromUserName
 		}
 	}
+	glog.Infof("Successfully WebwxSync: %+v", br.BaseResponse)
 	return br, nil
 }
