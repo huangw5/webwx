@@ -2,10 +2,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
 	"github.com/huangw5/webwx/wechat"
+	"github.com/huangw5/webwx/mail"
 )
 
 const (
@@ -13,12 +16,26 @@ const (
 )
 
 var (
-	appid = flag.String("appid", "wx782c26e4c19acffb", "App ID")
+	appid    = flag.String("appid", "wx782c26e4c19acffb", "App ID")
+	from     = flag.String("from", "", "Email sender")
+	to       = flag.String("to", "", "Email recipient")
+	password = flag.String("password", "", "Email password")
+	smtpAddr = flag.String("smtp", "smtp.gmail.com:587", "SMTP Address")
 )
 
 func main() {
 	flag.Parse()
 	flag.Lookup("logtostderr").Value.Set("true")
+
+	var m *mail.Mail
+	if *from != "" && *to != "" && *password != "" {
+		m = &mail.Mail{
+			From:     *from,
+			Pass:     *password,
+			SMTPAddr: *smtpAddr,
+		}
+		glog.Infof("New messages will be sent to %s", *to)
+	}
 
 	c := wechat.NewClient()
 	w := &wechat.Wechat{
@@ -40,7 +57,8 @@ func main() {
 		}
 		ws, err := w.WebwxSync()
 		if err != nil {
-			glog.Exitf("WebwxSync failed: %v", err)
+			glog.Errorf("WebwxSync failed: %v", err)
+			continue
 		}
 		var newMessages []string
 		for _, msg := range ws.AddMsgList {
@@ -49,9 +67,19 @@ func main() {
 				continue
 			}
 			if _, ok := messages[msg.MsgID]; !ok {
-				newMessages = append(newMessages, msg.Content)
+				text := fmt.Sprintf("%s: %s", msg.NickName, msg.Content)
+				newMessages = append(newMessages, text)
 				messages[msg.MsgID] = true
-				glog.Infof("Message: %s", msg.Content)
+				glog.Info(text)
+			}
+		}
+		if len(newMessages) > 0 && m != nil {
+			sub := fmt.Sprintf("You got %d new WeChat messages", len(newMessages))
+			body := strings.Join(newMessages, "\n")
+			if err := m.Send([]string{*to}, sub, body); err != nil {
+				glog.Warningf("Send email failed: %v", err)
+			} else {
+				glog.Infof("Sent successfully")
 			}
 		}
 	}

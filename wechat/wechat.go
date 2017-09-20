@@ -27,7 +27,7 @@ const (
 )
 
 var (
-	syncHosts = []string{"https://webpush2.wechat.com", "https://webpush.wechat.com"}
+	syncHosts = []string{"https://webpush2.wechat.com", "https://webpush.wechat.com", "https://webpush.wx2.qq.com"}
 )
 
 // NowUnixMilli returns UTC time of milliseconds since.
@@ -83,9 +83,17 @@ type BaseResponse struct {
 
 // AddMsg is new message.
 type AddMsg struct {
-	MsgID   string `json:"MsgId"`
-	MsgType int    `json:"MsgType"`
-	Content string `json:"Content"`
+	MsgID        string `json:"MsgId"`
+	MsgType      int    `json:"MsgType"`
+	Content      string `json:"Content"`
+	FromUserName string `json:"FromUserName"`
+	NickName     string
+}
+
+// Member is contact.
+type Member struct {
+	UserName string `json:"UserName"`
+	NickName string `json:"NickName"`
 }
 
 // BaseResponseJSON is.
@@ -93,6 +101,7 @@ type BaseResponseJSON struct {
 	BaseResponse *BaseResponse `json:"BaseResponse"`
 	AddMsgCount  int           `json:"AddMsgCount"`
 	AddMsgList   []*AddMsg     `json:"AddMsgList"`
+	MemberList   []*Member     `json:"MemberList"`
 }
 
 // SyncRes holds the result for syncing with the server.
@@ -153,6 +162,7 @@ type Wechat struct {
 	BaseRequestJSON *BaseRequestJSON
 	LoginInfo       *LoginInfo
 	AppID           string
+	contacts        map[string]string
 }
 
 // GetUUID returns the UUID.
@@ -287,6 +297,36 @@ func (w *Wechat) Init(url string) (*BaseRequestJSON, error) {
 	return bj, nil
 }
 
+// GetContacts retrieves contacts.
+func (w *Wechat) GetContacts() (map[string]string, error) {
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxgetcontact?r=%s", webHost, NowUnixMilli())
+	resp, err := w.Client.Do("POST", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error on POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Expect 301.
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP status: %s", resp.Status)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading body: %v", err)
+	}
+	glog.V(1).Infof("body: %s", string(body))
+	br := &BaseResponseJSON{}
+	if err := json.Unmarshal(body, br); err != nil {
+		return nil, fmt.Errorf("error on unmarshal: %v", err)
+	}
+	contacts := make(map[string]string)
+	for _, member := range br.MemberList {
+		contacts[member.UserName] = member.NickName
+	}
+	return contacts, nil
+}
+
 // Login logs onto the server.
 func (w *Wechat) Login() error {
 	glog.Infof("Getting UUID...")
@@ -319,6 +359,13 @@ func (w *Wechat) Login() error {
 	}
 	glog.Infof("Got BaseRequestJSON: %+v", w.BaseRequestJSON)
 	glog.Infof("Login successfully")
+
+	glog.Infof("Getting contacts...")
+	w.contacts, err = w.GetContacts()
+	if err != nil {
+		glog.Warningf("Failed to get contacts: %v", err)
+	}
+	glog.Infof("Got %d contacts", len(w.contacts))
 	return nil
 }
 
@@ -386,6 +433,13 @@ func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
 	br := &BaseResponseJSON{}
 	if err := json.Unmarshal(body, br); err != nil {
 		return nil, fmt.Errorf("error on unmarshal: %v", err)
+	}
+	for _, msg := range br.AddMsgList {
+		if n, ok := w.contacts[msg.FromUserName]; ok {
+			msg.NickName = n
+		} else {
+			msg.NickName = msg.FromUserName
+		}
 	}
 	return br, nil
 }
