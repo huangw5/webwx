@@ -80,7 +80,6 @@ func main() {
 		select {
 		case <-emailChan:
 			if len(newChan) > 0 && m != nil {
-				sub := fmt.Sprintf("New WeChat messages (%d)", len(newChan))
 				var l []string
 				for i := 0; i < len(newChan); i++ {
 					l = append(l, <-newChan)
@@ -89,6 +88,7 @@ func main() {
 				if !*detail {
 					body = ""
 				}
+				sub := fmt.Sprintf("New WeChat messages (%d)", len(l))
 				if err := m.Send([]string{*to}, sub, body); err != nil {
 					glog.Warningf("Send email failed: %v", err)
 				} else {
