@@ -13,8 +13,10 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"regexp"
+	"runtime"
 	"time"
 
 	"github.com/golang/glog"
@@ -239,6 +241,15 @@ func (w *Wechat) init(url string) (*BaseRequestJSON, error) {
 	return bj, nil
 }
 
+func displayQRCode(path string) {
+	switch runtime.GOOS {
+	case "linux":
+		cmd := exec.Command("xdg-open", path)
+		cmd.Start()
+	case "darwin":
+	}
+}
+
 // Login logs onto the server.
 func (w *Wechat) Login() error {
 	glog.Infof("Getting UUID...")
@@ -259,6 +270,7 @@ func (w *Wechat) Login() error {
 
 	pwd, _ := os.Getwd()
 	glog.Infof("Please scan QR code from you phone:\nfile://%s", path.Join(pwd, f.Name()))
+	displayQRCode(f.Name())
 	rurl, err := w.waitUntilLoggedIn(uuid)
 	if err != nil {
 		return fmt.Errorf("error on scanning the QR code")
