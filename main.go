@@ -55,6 +55,9 @@ func main() {
 	for ; true; <-syncChan {
 		sr, err := w.SyncCheck()
 		if err != nil || sr.Retcode != "0" {
+			if m != nil {
+				m.Send([]string{*to}, "SyncCheck failed", err.Error())
+			}
 			glog.Exitf("SyncCheck failed -- Res: %+v, err: %v", sr, err)
 		}
 		if sr.Selector == "0" {
