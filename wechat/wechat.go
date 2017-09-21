@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"time"
 
@@ -256,7 +257,8 @@ func (w *Wechat) Login() error {
 		return fmt.Errorf("error on getting QR code: %v", err)
 	}
 
-	glog.Infof("Please scan QR code from you phone: %s", f.Name())
+	pwd, _ := os.Getwd()
+	glog.Infof("Please scan QR code from you phone:\nfile://%s", path.Join(pwd, f.Name()))
 	rurl, err := w.waitUntilLoggedIn(uuid)
 	if err != nil {
 		return fmt.Errorf("error on scanning the QR code")
