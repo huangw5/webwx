@@ -10,9 +10,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -23,98 +23,24 @@ const (
 	// userAgent is Chrome.
 	userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.79 Safari/537.36"
 	loginHost = "https://login.weixin.qq.com"
-	webHost   = "https://web.wechat.com"
 )
 
 var (
-	syncHosts = []string{"https://webpush2.wechat.com", "https://webpush.wechat.com", "https://webpush.wx2.qq.com"}
+	syncHosts = map[string][]string{
+		"web.wechat.com": []string{
+			"https://webpush.web.wechat.com",
+			"https://webpush2.wechat.com",
+			"https://webpush.wechat.com",
+		},
+	}
+	webHosts = map[string]string{
+		"web.wechat.com": "https://web.wechat.com",
+	}
 )
 
 // NowUnixMilli returns UTC time of milliseconds since.
 func NowUnixMilli() int {
 	return int(time.Now().UnixNano() / 1000000)
-}
-
-// LoginInfo contains the login information.
-type LoginInfo struct {
-	Ret         string `xml:"ret"`
-	Message     string `xml:"message"`
-	Skey        string `xml:"skey"`
-	Wxsid       string `xml:"wxsid"`
-	Wxuin       string `xml:"wxuin"`
-	PassTicket  string `xml:"pass_ticket"`
-	Isgrayscale int    `xml:"isgrayscale"`
-}
-
-// BaseRequest is the base Request to the server.
-type BaseRequest struct {
-	DeviceID string `json:"DeviceID"`
-	Sid      string `json:"Sid"`
-	Skey     string `json:"Skey"`
-	Uin      string `json:"Uin"`
-}
-
-// SyncKey is sync key.
-type SyncKey struct {
-	Count int              `json:"Count"`
-	List  []map[string]int `json:"List"`
-}
-
-func (s SyncKey) String() string {
-	var entries []string
-	for _, m := range s.List {
-		entries = append(entries, fmt.Sprintf("%d_%d", m["Key"], m["Val"]))
-	}
-	return strings.Join(entries, "|")
-}
-
-// BaseRequestJSON is.
-type BaseRequestJSON struct {
-	BaseRequest *BaseRequest `json:"BaseRequest"`
-	SyncKey     *SyncKey     `json:"SyncKey"`
-	RR          int          `json:"rr"`
-}
-
-// BaseResponse is.
-type BaseResponse struct {
-	Ret    int    `json:"Ret"`
-	ErrMsg string `json:"ErrMsg"`
-}
-
-// AddMsg is new message.
-type AddMsg struct {
-	MsgID        string `json:"MsgId"`
-	MsgType      int    `json:"MsgType"`
-	Content      string `json:"Content"`
-	FromUserName string `json:"FromUserName"`
-	NickName     string
-}
-
-// Member is contact.
-type Member struct {
-	UserName string `json:"UserName"`
-	NickName string `json:"NickName"`
-}
-
-// BaseResponseJSON is.
-type BaseResponseJSON struct {
-	BaseResponse *BaseResponse `json:"BaseResponse"`
-	AddMsgCount  int           `json:"AddMsgCount"`
-	AddMsgList   []*AddMsg     `json:"AddMsgList"`
-	MemberList   []*Member     `json:"MemberList"`
-}
-
-// SyncRes holds the result for syncing with the server.
-//    retcode: 0    successful
-//	     1100 logout
-//	     1101 login otherwhere
-//    selector: 0 nothing
-//	      2 message
-//	      6 unkonwn
-//	      7 webwxsync
-type SyncRes struct {
-	Retcode  string
-	Selector string
 }
 
 // HTTPClient wraps http.Client.
@@ -147,7 +73,7 @@ func NewClient() HTTPClient {
 	}
 	return &httpClient{
 		&http.Client{
-			Timeout: time.Second * 30,
+			Timeout: time.Second * 50,
 			Jar:     jar,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -163,10 +89,11 @@ type Wechat struct {
 	LoginInfo       *LoginInfo
 	AppID           string
 	contacts        map[string]string
+	host            string
 }
 
-// GetUUID returns the UUID.
-func (w *Wechat) GetUUID() (string, error) {
+// getUUID returns the UUID.
+func (w *Wechat) getUUID() (string, error) {
 	url := fmt.Sprintf("%s/jslogin?appid=%s&fun=new&lang=us_EN&_=%d",
 		loginHost, w.AppID, NowUnixMilli())
 	resp, err := w.Client.Do("GET", url, nil)
@@ -190,8 +117,8 @@ func (w *Wechat) GetUUID() (string, error) {
 	return matches[1], nil
 }
 
-// GetQRCode retrieves and saves the QR image to a file.
-func (w *Wechat) GetQRCode(uuid string, f *os.File) error {
+// getQRCode retrieves and saves the QR image to a file.
+func (w *Wechat) getQRCode(uuid string, f *os.File) error {
 	url := fmt.Sprintf("%s/qrcode/%s?t=webwx", loginHost, uuid)
 	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
@@ -213,8 +140,8 @@ func (w *Wechat) GetQRCode(uuid string, f *os.File) error {
 	return nil
 }
 
-// WaitUntilLoggedIn waits until user clicks login or timed out. Returns a redirect_uri.
-func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
+// waitUntilLoggedIn waits until user clicks login or timed out. Returns a redirect_uri.
+func (w *Wechat) waitUntilLoggedIn(uuid string) (string, error) {
 	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/login?uuid=%s&_=%d",
 		loginHost, uuid, NowUnixMilli())
 	re := regexp.MustCompile("window.redirect_uri=\"([^\"]+)\"")
@@ -241,8 +168,8 @@ func (w *Wechat) WaitUntilLoggedIn(uuid string) (string, error) {
 	return "", errors.New("timeout when waiting for user to login")
 }
 
-// Init logs on and returns basic info.
-func (w *Wechat) Init(url string) (*BaseRequestJSON, error) {
+// init logs on and returns basic info.
+func (w *Wechat) init(url string) (*BaseRequestJSON, error) {
 	// First access the redirect_uri.
 	resp, err := w.Client.Do("GET", url, nil)
 	if err != nil {
@@ -259,6 +186,7 @@ func (w *Wechat) Init(url string) (*BaseRequestJSON, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %v", err)
 	}
+	glog.V(1).Infof("body: %s", string(body))
 
 	li := &LoginInfo{}
 	if err := xml.Unmarshal(body, li); err != nil {
@@ -280,7 +208,7 @@ func (w *Wechat) Init(url string) (*BaseRequestJSON, error) {
 	}
 	w.LoginInfo = li
 	url2 := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxinit?pass_ticket=%s&skey=%s&r=%d",
-		webHost, li.PassTicket, li.Skey, NowUnixMilli())
+		webHosts[w.host], li.PassTicket, li.Skey, NowUnixMilli())
 	resp2, err := w.Client.Do("POST", url2, bytes.NewBuffer(b))
 	if err != nil {
 		return nil, fmt.Errorf("error on POST: %v", err)
@@ -291,15 +219,67 @@ func (w *Wechat) Init(url string) (*BaseRequestJSON, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %v", err)
 	}
+	glog.V(1).Infof("webwxinit: %s", string(body2))
 	if err := json.Unmarshal(body2, bj); err != nil {
 		return nil, fmt.Errorf("error on unmarshal: %v", err)
 	}
 	return bj, nil
 }
 
+// Login logs onto the server.
+func (w *Wechat) Login() error {
+	glog.Infof("Getting UUID...")
+	uuid, err := w.getUUID()
+	if err != nil {
+		return fmt.Errorf("error on getUUID(): %v", err)
+	}
+	glog.Infof("UUID: %s", uuid)
+
+	glog.Infof("Getting QR code...")
+	f, err := os.Create("QR.jpg")
+	if err != nil {
+		return fmt.Errorf("error on createing QR file: %v", err)
+	}
+	if err := w.getQRCode(uuid, f); err != nil {
+		return fmt.Errorf("error on getting QR code: %v", err)
+	}
+
+	glog.Infof("Please scan QR code from you phone: %s", f.Name())
+	rurl, err := w.waitUntilLoggedIn(uuid)
+	if err != nil {
+		return fmt.Errorf("error on scanning the QR code")
+	}
+	glog.Infof("Got init URL: %s", rurl)
+	u, err := url.Parse(rurl)
+	if err != nil {
+		return fmt.Errorf("error on parsing url: %v", err)
+	}
+	w.host = u.Hostname()
+	glog.Infof("Updated host to %s", w.host)
+
+	glog.Infof("Initializing wechat...")
+	w.BaseRequestJSON, err = w.init(rurl)
+	if err != nil {
+		return fmt.Errorf("error on init: %v", err)
+	}
+	glog.Infof("Got BaseRequestJSON: %+v", w.BaseRequestJSON)
+	glog.Infof("Login successfully")
+
+	glog.Infof("Getting contacts...")
+	w.contacts, err = w.GetContacts()
+	if err != nil {
+		glog.Warningf("Failed to get contacts: %v", err)
+	}
+	if u := w.BaseRequestJSON.User; u != nil {
+		w.contacts[u.UserName] = u.NickName
+	}
+	glog.Infof("Got %d contacts", len(w.contacts))
+	return nil
+}
+
 // GetContacts retrieves contacts.
 func (w *Wechat) GetContacts() (map[string]string, error) {
-	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxgetcontact?r=%s", webHost, NowUnixMilli())
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxgetcontact?r=%d", webHosts[w.host], NowUnixMilli())
 	resp, err := w.Client.Do("POST", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error on POST: %v", err)
@@ -315,7 +295,6 @@ func (w *Wechat) GetContacts() (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %v", err)
 	}
-	glog.V(1).Infof("body: %s", string(body))
 	br := &BaseResponseJSON{}
 	if err := json.Unmarshal(body, br); err != nil {
 		return nil, fmt.Errorf("error on unmarshal: %v", err)
@@ -327,58 +306,19 @@ func (w *Wechat) GetContacts() (map[string]string, error) {
 	return contacts, nil
 }
 
-// Login logs onto the server.
-func (w *Wechat) Login() error {
-	glog.Infof("Getting UUID...")
-	uuid, err := w.GetUUID()
-	if err != nil {
-		return fmt.Errorf("error on GetUUID(): %v", err)
-	}
-	glog.Infof("UUID: %s", uuid)
-
-	glog.Infof("Getting QR code...")
-	f, err := os.Create("QR.jpg")
-	if err != nil {
-		return fmt.Errorf("error on createing QR file: %v", err)
-	}
-	if err := w.GetQRCode(uuid, f); err != nil {
-		return fmt.Errorf("error on getting QR code: %v", err)
-	}
-
-	glog.Infof("Please scan QR code from you phone: %s", f.Name())
-	rurl, err := w.WaitUntilLoggedIn(uuid)
-	if err != nil {
-		return fmt.Errorf("error on scanning the QR code")
-	}
-	glog.Infof("Got init URL: %s", rurl)
-
-	glog.Infof("Initializing wechat...")
-	w.BaseRequestJSON, err = w.Init(rurl)
-	if err != nil {
-		return fmt.Errorf("error on init: %v", err)
-	}
-	glog.Infof("Got BaseRequestJSON: %+v", w.BaseRequestJSON)
-	glog.Infof("Login successfully")
-
-	glog.Infof("Getting contacts...")
-	w.contacts, err = w.GetContacts()
-	if err != nil {
-		glog.Warningf("Failed to get contacts: %v", err)
-	}
-	glog.Infof("Got %d contacts", len(w.contacts))
-	return nil
-}
-
 // SyncCheck synchronizes with the server.
 func (w *Wechat) SyncCheck() (*SyncRes, error) {
-	glog.Infof("SyncCheck...")
 	syncRes := &SyncRes{}
 	var err error
-	for _, host := range syncHosts {
-		syncRes, err = w.syncCheckHelper(host)
-		if err == nil && syncRes.Retcode == "0" {
-			glog.Infof("Successfully synccheck: %+v", syncRes)
-			return syncRes, nil
+	for i := 0; i < 3; i++ {
+		for _, host := range syncHosts[w.host] {
+			glog.Infof("SyncCheck on %s. Attempt: %d", host, i+1)
+			syncRes, err = w.syncCheckHelper(host)
+			if err == nil && syncRes.Retcode == "0" {
+				glog.Infof("Successfully synccheck: %+v", syncRes)
+				return syncRes, nil
+			}
+			time.Sleep(time.Second)
 		}
 	}
 	return syncRes, err
@@ -413,9 +353,24 @@ func (w *Wechat) syncCheckHelper(host string) (*SyncRes, error) {
 
 // WebwxSync retrieves new messages.
 func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
-	glog.Info("WebwxSync...")
+	var br *BaseResponseJSON
+	var err error
+	for i := 0; i < 3; i++ {
+		host := webHosts[w.host]
+		glog.Infof("WebwxSync on %s. Attemp: %d", host, i+0)
+		br, err := w.webwxsyncHelper(host)
+		if err == nil {
+			glog.Infof("Successfully WebwxSync: %+v", br.BaseResponse)
+			return br, err
+		}
+		time.Sleep(time.Second)
+	}
+	return br, err
+}
+
+func (w *Wechat) webwxsyncHelper(host string) (*BaseResponseJSON, error) {
 	w.BaseRequestJSON.RR = NowUnixMilli()
-	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxsync?sid=%s&skey=%s&r=%d", webHost, w.BaseRequestJSON.BaseRequest.Sid, w.BaseRequestJSON.BaseRequest.Skey, w.BaseRequestJSON.RR)
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxsync?sid=%s&skey=%s&r=%d", host, w.BaseRequestJSON.BaseRequest.Sid, w.BaseRequestJSON.BaseRequest.Skey, w.BaseRequestJSON.RR)
 	b, err := json.Marshal(w.BaseRequestJSON)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal: %v", err)
@@ -430,7 +385,7 @@ func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading body: %v", err)
 	}
-	glog.V(1).Infof("body: %s", string(body))
+	glog.V(1).Infof("WebwxSync: %s", string(body))
 	br := &BaseResponseJSON{}
 	if err := json.Unmarshal(body, br); err != nil {
 		return nil, fmt.Errorf("error on unmarshal: %v", err)
@@ -442,6 +397,5 @@ func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
 			msg.NickName = msg.FromUserName
 		}
 	}
-	glog.Infof("Successfully WebwxSync: %+v", br.BaseResponse)
 	return br, nil
 }

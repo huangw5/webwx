@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/huangw5/webwx/wechat"
 	"github.com/huangw5/webwx/mail"
+	"github.com/huangw5/webwx/wechat"
 )
 
 const (
-	syncInterval = 28 * time.Second
+	syncInterval  = 27 * time.Second
+	emailInterval = time.Minute
 )
 
 var (
@@ -21,11 +22,12 @@ var (
 	to       = flag.String("to", "", "Email recipient")
 	password = flag.String("password", "", "Email password")
 	smtpAddr = flag.String("smtp", "smtp.gmail.com:587", "SMTP Address")
+	detail   = flag.Bool("detail", true, "Wether or not show detailed messages in emails")
 )
 
 func main() {
 	flag.Parse()
-	flag.Lookup("logtostderr").Value.Set("true")
+	flag.Lookup("alsologtostderr").Value.Set("true")
 
 	var m *mail.Mail
 	if *from != "" && *to != "" && *password != "" {
@@ -45,9 +47,12 @@ func main() {
 	if err := w.Login(); err != nil {
 		glog.Exitf("Failed to login: %v", err)
 	}
-	messages := make(map[string]bool)
-	ticker := time.NewTicker(syncInterval)
-	for ; true; <-ticker.C {
+
+	allMessages := make(map[string]bool)
+	newChan := make(chan string, 10000)
+	syncChan := time.NewTicker(syncInterval).C
+	emailChan := time.NewTicker(emailInterval).C
+	for ; true; <-syncChan {
 		sr, err := w.SyncCheck()
 		if err != nil || sr.Retcode != "0" {
 			glog.Exitf("SyncCheck failed -- Res: %+v, err: %v", sr, err)
@@ -60,27 +65,38 @@ func main() {
 			glog.Errorf("WebwxSync failed: %v", err)
 			continue
 		}
-		var newMessages []string
 		for _, msg := range ws.AddMsgList {
-			if msg.MsgType != 1 {
+			if msg.MsgType != 1 && msg.MsgType != 3 && msg.MsgType != 34 && msg.MsgType != 43 && msg.MsgType != 62 && msg.MsgType != 47 {
 				// Skip non-text messages.
 				continue
 			}
-			if _, ok := messages[msg.MsgID]; !ok {
+			if _, ok := allMessages[msg.MsgID]; !ok {
 				text := fmt.Sprintf("%s: %s", msg.NickName, msg.Content)
-				newMessages = append(newMessages, text)
-				messages[msg.MsgID] = true
+				newChan <- text
+				allMessages[msg.MsgID] = true
 				glog.Info(text)
 			}
 		}
-		if len(newMessages) > 0 && m != nil {
-			sub := fmt.Sprintf("You got %d new WeChat messages", len(newMessages))
-			body := strings.Join(newMessages, "\n")
-			if err := m.Send([]string{*to}, sub, body); err != nil {
-				glog.Warningf("Send email failed: %v", err)
-			} else {
-				glog.Infof("Sent successfully")
+		select {
+		case <-emailChan:
+			if len(newChan) > 0 && m != nil {
+				sub := fmt.Sprintf("New WeChat messages (%d)", len(newChan))
+				var l []string
+				for i := 0; i < len(newChan); i++ {
+					l = append(l, <-newChan)
+				}
+				body := strings.Join(l, "\n")
+				if !*detail {
+					body = ""
+				}
+				if err := m.Send([]string{*to}, sub, body); err != nil {
+					glog.Warningf("Send email failed: %v", err)
+				} else {
+					glog.Infof("Sent successfully")
+				}
 			}
+		default:
+			glog.V(1).Infof("Not sending email")
 		}
 	}
 }
