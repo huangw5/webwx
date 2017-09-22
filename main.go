@@ -56,7 +56,7 @@ func main() {
 		sr, err := w.SyncCheck()
 		if err != nil || sr.Retcode != "0" {
 			if m != nil {
-				m.Send([]string{*to}, "SyncCheck failed", err.Error())
+				m.Send([]string{*to}, fmt.Sprintf("SyncCheck failed -- Res: %+v, err: %v", sr, err), "")
 			}
 			glog.Exitf("SyncCheck failed -- Res: %+v, err: %v", sr, err)
 		}

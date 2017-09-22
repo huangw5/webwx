@@ -36,9 +36,13 @@ var (
 			"https://webpush2.wechat.com",
 			"https://webpush.wechat.com",
 		},
+		"wx2.qq.com": []string{
+			"https://webpush.wx2.qq.com",
+		},
 	}
 	webHosts = map[string]string{
 		"web.wechat.com": "https://web.wechat.com",
+		"wx2.qq.com": "https://wx2.qq.com",
 	}
 )
 
