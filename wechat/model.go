@@ -58,18 +58,31 @@ type AddMsg struct {
 	MsgType      int    `json:"MsgType"`
 	Content      string `json:"Content"`
 	FromUserName string `json:"FromUserName"`
+	ToUserName   string `json:"ToUserName"`
 	NickName     string
+}
+
+// Msg is message to send.
+type Msg struct {
+	ClientMsgId  int    `json:"ClientMsgId"`
+	Content      string `json:"Content"`
+	FromUserName string `json:"FromUserName"`
+	LocalID      string `json:"LocalID"`
+	ToUserName   string `json:"ToUserName"`
+	Type         string `json:"Type"`
 }
 
 // Member is contact.
 type Member struct {
-	UserName string `json:"UserName"`
-	NickName string `json:"NickName"`
+	UserName    string `json:"UserName"`
+	NickName    string `json:"NickName"`
+	MemberCount int    `json:"MemberCount"`
 }
 
 // BaseResponseJSON is.
 type BaseResponseJSON struct {
 	BaseResponse *BaseResponse `json:"BaseResponse"`
+	SyncCheckKey *SyncKey      `json:"SyncCheckKey"`
 	AddMsgCount  int           `json:"AddMsgCount"`
 	AddMsgList   []*AddMsg     `json:"AddMsgList"`
 	MemberList   []*Member     `json:"MemberList"`

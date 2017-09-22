@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	syncInterval  = 27 * time.Second
+	syncInterval  = 3 * time.Second
 	emailInterval = time.Minute
 )
 
@@ -70,7 +70,11 @@ func main() {
 		}
 		for _, msg := range ws.AddMsgList {
 			if msg.MsgType != 1 && msg.MsgType != 3 && msg.MsgType != 34 && msg.MsgType != 43 && msg.MsgType != 62 && msg.MsgType != 47 {
-				// Skip non-text messages.
+				// Skip non-displayable messages.
+				continue
+			}
+			if u, ok := w.Contacts[msg.ToUserName]; ok && u.MemberCount > 0 {
+				// Skip group messages.
 				continue
 			}
 			if _, ok := allMessages[msg.MsgID]; !ok {

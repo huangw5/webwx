@@ -42,7 +42,7 @@ var (
 	}
 	webHosts = map[string]string{
 		"web.wechat.com": "https://web.wechat.com",
-		"wx2.qq.com": "https://wx2.qq.com",
+		"wx2.qq.com":     "https://wx2.qq.com",
 	}
 )
 
@@ -106,8 +106,9 @@ type Wechat struct {
 	Client          HTTPClient
 	BaseRequestJSON *BaseRequestJSON
 	LoginInfo       *LoginInfo
+	User            *Member
 	AppID           string
-	contacts        map[string]string
+	Contacts        map[string]*Member
 	host            string
 }
 
@@ -251,6 +252,8 @@ func displayQRCode(path string) {
 		cmd := exec.Command("xdg-open", path)
 		cmd.Start()
 	case "darwin":
+		cmd := exec.Command("open", path)
+		cmd.Start()
 	}
 }
 
@@ -296,19 +299,22 @@ func (w *Wechat) Login() error {
 	glog.Infof("Login successfully")
 
 	glog.Infof("Getting contacts...")
-	w.contacts, err = w.GetContacts()
+	w.Contacts, err = w.GetContacts()
 	if err != nil {
 		glog.Warningf("Failed to get contacts: %v", err)
 	}
 	if u := w.BaseRequestJSON.User; u != nil {
-		w.contacts[u.UserName] = u.NickName
+		w.Contacts[u.UserName] = u
+		w.User = u
+		w.BaseRequestJSON.User = nil
+		glog.Infof("My account: %+v", w.User)
 	}
-	glog.Infof("Got %d contacts", len(w.contacts))
+	glog.Infof("Got %d contacts", len(w.Contacts))
 	return nil
 }
 
 // GetContacts retrieves contacts.
-func (w *Wechat) GetContacts() (map[string]string, error) {
+func (w *Wechat) GetContacts() (map[string]*Member, error) {
 	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxgetcontact?r=%d", webHosts[w.host], NowUnixMilli())
 	resp, err := w.Client.Do("POST", url, nil)
 	if err != nil {
@@ -329,11 +335,12 @@ func (w *Wechat) GetContacts() (map[string]string, error) {
 	if err := json.Unmarshal(body, br); err != nil {
 		return nil, fmt.Errorf("error on unmarshal: %v", err)
 	}
-	contacts := make(map[string]string)
+	m := make(map[string]*Member)
 	for _, member := range br.MemberList {
-		contacts[member.UserName] = member.NickName
+		m[member.UserName] = member
+		m[member.NickName] = member
 	}
-	return contacts, nil
+	return m, nil
 }
 
 // SyncCheck synchronizes with the server.
@@ -348,6 +355,7 @@ func (w *Wechat) SyncCheck() (*SyncRes, error) {
 				glog.Infof("Successfully synccheck: %+v", syncRes)
 				return syncRes, nil
 			}
+			glog.Warningf("SyncCheck failed: %+v, %v", syncRes, err)
 			time.Sleep(time.Second)
 		}
 	}
@@ -391,6 +399,8 @@ func (w *Wechat) WebwxSync() (*BaseResponseJSON, error) {
 		br, err := w.webwxsyncHelper(host)
 		if err == nil {
 			glog.Infof("Successfully WebwxSync: %+v", br.BaseResponse)
+			// Update SyncKey
+			w.BaseRequestJSON.SyncKey = br.SyncCheckKey
 			return br, err
 		}
 		time.Sleep(time.Second)
@@ -421,11 +431,16 @@ func (w *Wechat) webwxsyncHelper(host string) (*BaseResponseJSON, error) {
 		return nil, fmt.Errorf("error on unmarshal: %v", err)
 	}
 	for _, msg := range br.AddMsgList {
-		if n, ok := w.contacts[msg.FromUserName]; ok {
-			msg.NickName = n
+		if n, ok := w.Contacts[msg.FromUserName]; ok {
+			msg.NickName = n.NickName
 		} else {
 			msg.NickName = msg.FromUserName
 		}
 	}
 	return br, nil
+}
+
+func (w *Wechat) SendMsg(msg *Msg) error {
+	//url := "https://wx.qq.com/cgi-bin/mmwebwx-bin/webwxsendmsg?sid=QfLp+Z+FePzvOFoG&r=1377482079876"
+	return nil
 }
