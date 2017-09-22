@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	syncInterval  = 3 * time.Second
-	emailInterval = time.Minute
+	syncInterval   = 3 * time.Second
+	notifyInterval = time.Minute
 )
 
 var (
@@ -23,7 +23,40 @@ var (
 	password = flag.String("password", "", "Email password")
 	smtpAddr = flag.String("smtp", "smtp.gmail.com:587", "SMTP Address")
 	detail   = flag.Bool("detail", true, "Wether or not show detailed messages in emails")
+	forward  = flag.String("forward", "", "The nickname to which the messages are forwarded")
 )
+
+func sendEmail(m *mail.Mail, newChan chan *wechat.AddMsg) error {
+	var l []string
+	for i := 0; i < len(newChan); i++ {
+		msg := <-newChan
+		l = append(l, fmt.Sprintf("%s: %s", msg.NickName, msg.Content))
+	}
+	body := strings.Join(l, "\n")
+	if !*detail {
+		body = ""
+	}
+	if err := m.Send([]string{*to}, "New WeChat messages", body); err != nil {
+		return err
+	}
+	glog.Infof("Successfully sent to %s", *to)
+	return nil
+}
+
+func forwardMsg(w *wechat.Wechat, toUserName string, newChan chan *wechat.AddMsg) error {
+	var l []string
+	for i := 0; i < len(newChan); i++ {
+		msg := <-newChan
+		l = append(l, fmt.Sprintf("%s: %s", msg.NickName, msg.Content))
+	}
+	body := strings.Join(l, "\n")
+	toSend := &wechat.Msg{
+		Content:    body,
+		ToUserName: toUserName,
+		Type:       1,
+	}
+	return w.SendMsg(toSend)
+}
 
 func main() {
 	flag.Parse()
@@ -38,6 +71,9 @@ func main() {
 		}
 		glog.Infof("New messages will be sent to %s", *to)
 	}
+	if *forward != "" {
+		glog.Infof("New messages will be forwarded to %s", *forward)
+	}
 
 	c := wechat.NewClient()
 	w := &wechat.Wechat{
@@ -49,9 +85,9 @@ func main() {
 	}
 
 	allMessages := make(map[string]bool)
-	newChan := make(chan string, 10000)
+	newChan := make(chan *wechat.AddMsg, 9999)
 	syncChan := time.NewTicker(syncInterval).C
-	emailChan := time.NewTicker(emailInterval).C
+	notifyChan := time.NewTicker(notifyInterval).C
 	for ; true; <-syncChan {
 		sr, err := w.SyncCheck()
 		if err != nil || sr.Retcode != "0" {
@@ -73,33 +109,29 @@ func main() {
 				// Skip non-displayable messages.
 				continue
 			}
-			if u, ok := w.Contacts[msg.ToUserName]; ok && u.MemberCount > 0 {
-				// Skip group messages.
-				continue
-			}
 			if _, ok := allMessages[msg.MsgID]; !ok {
-				text := fmt.Sprintf("%s: %s", msg.NickName, msg.Content)
-				newChan <- text
 				allMessages[msg.MsgID] = true
-				glog.Info(text)
+				glog.Info(fmt.Sprintf("%s: %s", msg.NickName, msg.Content))
+				// Do not notify group chat messages.
+				if !strings.HasPrefix(msg.FromUserName, "@@") {
+					newChan <- msg
+				}
 			}
 		}
 		select {
-		case <-emailChan:
-			if len(newChan) > 0 && m != nil {
-				var l []string
-				for i := 0; i < len(newChan); i++ {
-					l = append(l, <-newChan)
+		case <-notifyChan:
+			if len(newChan) > 0 {
+				if m != nil {
+					if err := sendEmail(m, newChan); err != nil {
+						glog.Warningf("Failed to send email: %v", err)
+					}
 				}
-				body := strings.Join(l, "\n")
-				if !*detail {
-					body = ""
-				}
-				sub := fmt.Sprintf("New WeChat messages (%d)", len(l))
-				if err := m.Send([]string{*to}, sub, body); err != nil {
-					glog.Warningf("Send email failed: %v", err)
+				if user, ok := w.Contacts[*forward]; *forward != "" && ok {
+					if err := forwardMsg(w, user.UserName, newChan); err != nil {
+						glog.Warningf("Failed to forward: %v")
+					}
 				} else {
-					glog.Infof("Sent successfully")
+					glog.Warningf("Unable to forward to: %s", user)
 				}
 			}
 		default:

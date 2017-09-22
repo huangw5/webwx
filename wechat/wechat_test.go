@@ -116,7 +116,7 @@ func Testinit(t *testing.T) {
 }
 
 func TestMarshal(t *testing.T) {
-	bj := &BaseJSON{
+	bj := &BaseRequestJSON{
 		BaseRequest: &BaseRequest{
 			Uin:      "li.Wxuin",
 			Sid:      "li.Wxsid",
@@ -175,7 +175,7 @@ func TestSyncCheck(t *testing.T) {
 		err: nil,
 	}
 	w := &Wechat{Client: c}
-	w.BaseJSON = &BaseJSON{
+	w.BaseRequestJSON = &BaseRequestJSON{
 		BaseRequest: &BaseRequest{},
 		SyncKey:     &SyncKey{},
 	}
@@ -188,5 +188,11 @@ func TestSyncCheck(t *testing.T) {
 	}
 	if sr.Selector != "0" {
 		t.Errorf("Selector = %s, want %s", sr.Selector, "0")
+	}
+}
+
+func TestGenInt(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		log.Printf("%d: %d", i, genInt(i))
 	}
 }

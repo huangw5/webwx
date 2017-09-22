@@ -44,6 +44,7 @@ type BaseRequestJSON struct {
 	SyncKey     *SyncKey     `json:"SyncKey"`
 	RR          int          `json:"rr"`
 	User        *Member      `json:"User"`
+	Msg         *Msg         `json:"Msg"`
 }
 
 // BaseResponse is.
@@ -64,19 +65,18 @@ type AddMsg struct {
 
 // Msg is message to send.
 type Msg struct {
-	ClientMsgId  int    `json:"ClientMsgId"`
 	Content      string `json:"Content"`
 	FromUserName string `json:"FromUserName"`
-	LocalID      string `json:"LocalID"`
 	ToUserName   string `json:"ToUserName"`
-	Type         string `json:"Type"`
+	ClientMsgID  int    `json:"ClientMsgId"`
+	LocalID      int    `json:"LocalID"`
+	Type         int    `json:"Type"`
 }
 
 // Member is contact.
 type Member struct {
-	UserName    string `json:"UserName"`
-	NickName    string `json:"NickName"`
-	MemberCount int    `json:"MemberCount"`
+	UserName string `json:"UserName"`
+	NickName string `json:"NickName"`
 }
 
 // BaseResponseJSON is.

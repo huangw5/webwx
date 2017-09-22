@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -49,6 +50,14 @@ var (
 // NowUnixMilli returns UTC time of milliseconds since.
 func NowUnixMilli() int {
 	return int(time.Now().UnixNano() / 1000000)
+}
+
+func genInt(digits int) int {
+	res := 0
+	for i := 0; i < digits; i++ {
+		res += (rand.Int()%10)*10 ^ i
+	}
+	return res
 }
 
 // HTTPClient wraps http.Client.
@@ -440,7 +449,54 @@ func (w *Wechat) webwxsyncHelper(host string) (*BaseResponseJSON, error) {
 	return br, nil
 }
 
+// SendMsg sends the given message.
 func (w *Wechat) SendMsg(msg *Msg) error {
-	//url := "https://wx.qq.com/cgi-bin/mmwebwx-bin/webwxsendmsg?sid=QfLp+Z+FePzvOFoG&r=1377482079876"
+	glog.Infof("Sending messages to %s", msg.ToUserName)
+	msg.ClientMsgID = NowUnixMilli()
+	msg.LocalID = NowUnixMilli()
+	msg.FromUserName = w.User.UserName
+	baseJSON := &BaseRequestJSON{
+		BaseRequest: w.BaseRequestJSON.BaseRequest,
+		Msg:         msg,
+		RR:          NowUnixMilli(),
+	}
+	var err error
+	for i := 0; i < 3; i++ {
+		host := webHosts[w.host]
+		glog.Infof("SendMsg on %s. Attemp: %d", host, i+0)
+		err = w.sendMsgHelper(host, baseJSON)
+		if err == nil {
+			glog.Info("Successfully SendMsg")
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return err
+}
+
+func (w *Wechat) sendMsgHelper(host string, baseJSON *BaseRequestJSON) error {
+	b, err := json.Marshal(baseJSON)
+	if err != nil {
+		return fmt.Errorf("failed to marshal: %v", err)
+	}
+	url := fmt.Sprintf("%s/cgi-bin/mmwebwx-bin/webwxsendmsg?pass_ticket=%s", host)
+	resp, err := w.Client.Do("POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return fmt.Errorf("error on POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error reading body: %v", err)
+	}
+	glog.V(1).Infof("SendMsg: %s", string(body))
+	br := &BaseResponseJSON{}
+	if err := json.Unmarshal(body, br); err != nil {
+		return fmt.Errorf("error on unmarshal: %v", err)
+	}
+	if br.BaseResponse.Ret != 0 {
+		return fmt.Errorf("error on sending: %+v", br)
+	}
 	return nil
 }
