@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/huangw5/webwx/mail"
+	"github.com/huangw5/webwx/email"
 	"github.com/huangw5/webwx/wechat"
 )
 
 const (
-	syncInterval   = 3 * time.Second
 	notifyInterval = time.Minute
 )
 
@@ -26,10 +25,10 @@ var (
 	forward  = flag.String("forward", "", "The nickname to which the messages are forwarded")
 )
 
-func sendEmail(m *mail.Mail, newChan chan *wechat.AddMsg) error {
+func sendEmail(m *email.Email, msgChan chan *wechat.AddMsg) error {
 	var l []string
-	for i := 0; i < len(newChan); i++ {
-		msg := <-newChan
+	for i := 0; i < len(msgChan); i++ {
+		msg := <-msgChan
 		l = append(l, fmt.Sprintf("%s: %s", msg.NickName, msg.Content))
 	}
 	body := strings.Join(l, "\n")
@@ -43,10 +42,10 @@ func sendEmail(m *mail.Mail, newChan chan *wechat.AddMsg) error {
 	return nil
 }
 
-func forwardMsg(w *wechat.Wechat, toUserName string, newChan chan *wechat.AddMsg) error {
+func forwardMsg(w *wechat.Wechat, toUserName string, msgChan chan *wechat.AddMsg) error {
 	var l []string
-	for i := 0; i < len(newChan); i++ {
-		msg := <-newChan
+	for i := 0; i < len(msgChan); i++ {
+		msg := <-msgChan
 		l = append(l, fmt.Sprintf("%s: %s", msg.NickName, msg.Content))
 	}
 	body := strings.Join(l, "\n")
@@ -62,9 +61,9 @@ func main() {
 	flag.Parse()
 	flag.Lookup("alsologtostderr").Value.Set("true")
 
-	var m *mail.Mail
+	var m *email.Email
 	if *from != "" && *to != "" && *password != "" {
-		m = &mail.Mail{
+		m = &email.Email{
 			From:     *from,
 			Pass:     *password,
 			SMTPAddr: *smtpAddr,
@@ -85,57 +84,56 @@ func main() {
 	}
 
 	allMessages := make(map[string]bool)
-	newChan := make(chan *wechat.AddMsg, 9999)
-	syncChan := time.NewTicker(syncInterval).C
+	msgChan := make(chan *wechat.AddMsg, 9999)
 	notifyChan := time.NewTicker(notifyInterval).C
-	for ; true; <-syncChan {
-		sr, err := w.SyncCheck()
-		if err != nil || sr.Retcode != "0" {
-			if m != nil {
-				m.Send([]string{*to}, fmt.Sprintf("SyncCheck failed -- Res: %+v, err: %v", sr, err), "")
-			}
-			glog.Exitf("SyncCheck failed -- Res: %+v, err: %v", sr, err)
-		}
-		if sr.Selector == "0" {
-			continue
-		}
-		ws, err := w.WebwxSync()
-		if err != nil {
-			glog.Errorf("WebwxSync failed: %v", err)
-			continue
-		}
-		for _, msg := range ws.AddMsgList {
-			if msg.MsgType != 1 && msg.MsgType != 3 && msg.MsgType != 34 && msg.MsgType != 43 && msg.MsgType != 62 && msg.MsgType != 47 {
-				// Skip non-displayable messages.
-				continue
-			}
-			if _, ok := allMessages[msg.MsgID]; !ok {
-				allMessages[msg.MsgID] = true
-				glog.Info(fmt.Sprintf("%s: %s", msg.NickName, msg.Content))
-				// Do not notify group chat messages.
-				if !strings.HasPrefix(msg.FromUserName, "@@") {
-					newChan <- msg
-				}
-			}
-		}
+	for {
 		select {
 		case <-notifyChan:
-			if len(newChan) > 0 {
+			if len(msgChan) > 0 {
 				if m != nil {
-					if err := sendEmail(m, newChan); err != nil {
+					if err := sendEmail(m, msgChan); err != nil {
 						glog.Warningf("Failed to send email: %v", err)
 					}
 				}
 				if user, ok := w.Contacts[*forward]; *forward != "" && ok {
-					if err := forwardMsg(w, user.UserName, newChan); err != nil {
+					if err := forwardMsg(w, user.UserName, msgChan); err != nil {
 						glog.Warningf("Failed to forward: %v")
 					}
 				} else {
-					glog.Warningf("Unable to forward to: %s", user)
+					glog.Warningf("Unable to forward to: %v", user)
 				}
 			}
 		default:
-			glog.V(1).Infof("Not sending email")
+			sr, err := w.SyncCheck()
+			if err != nil || sr.Retcode != "0" {
+				if m != nil {
+					m.Send([]string{*to}, fmt.Sprintf("SyncCheck failed -- Res: %+v, err: %v", sr, err), "")
+				}
+				glog.Exitf("SyncCheck failed -- Res: %+v, err: %v", sr, err)
+			}
+			if sr.Selector == "0" {
+				continue
+			}
+			ws, err := w.WebwxSync()
+			if err != nil {
+				glog.Errorf("WebwxSync failed: %v", err)
+				continue
+			}
+			for _, msg := range ws.AddMsgList {
+				if msg.MsgType != 1 && msg.MsgType != 3 && msg.MsgType != 34 && msg.MsgType != 43 && msg.MsgType != 62 && msg.MsgType != 47 {
+					// Skip non-displayable messages.
+					continue
+				}
+				if _, ok := allMessages[msg.MsgID]; !ok {
+					allMessages[msg.MsgID] = true
+					glog.Info(fmt.Sprintf("%s: %s", msg.NickName, msg.Content))
+					// Do not notify group chat messages.
+					if !strings.HasPrefix(msg.FromUserName, "@@") {
+						msgChan <- msg
+					}
+				}
+			}
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

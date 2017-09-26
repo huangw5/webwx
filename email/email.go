@@ -1,4 +1,4 @@
-package mail
+package email
 
 import (
 	"fmt"
@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// Mail is for sending emails.
+// Email is for sending emails.
 // Example:
-//	m := &mail.Mail{
+//	m := &email.Email{
 //		From:     "xxx@gmail.com",
 //		Pass:     "xxx",
 //		SMTPAddr: "smtp.gmail.com:587",
@@ -17,14 +17,14 @@ import (
 //	if err := m.Send([]string{"yyy@gmail.com"}, "Hello", "This is a message"); err != nil {
 //		glog.Exitf("Send failed: %v", err)
 //	}
-type Mail struct {
+type Email struct {
 	From     string
 	Pass     string
 	SMTPAddr string
 }
 
 // Send sends a message.
-func (m *Mail) Send(to []string, subject string, body string) error {
+func (m *Email) Send(to []string, subject string, body string) error {
 	host, _, err := net.SplitHostPort(m.SMTPAddr)
 	if err != nil {
 		return err
